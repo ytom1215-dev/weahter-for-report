@@ -304,16 +304,16 @@ if decoded_text is not None:
         else:
             u = "mm" if target_label == "降水量" else "時間"
             r = (total_act / total_norm * 100) if total_norm > 0 else 0
-            if r >= 120:
+            if r >= 130:
                 trend_t = "かなり多く推移した"
             elif r >= 110:
-                trend_t = "多く推移した"
-            elif r <= 80:
-                trend_t = "かなり少なく推移した"
-            elif r <= 90:
-                trend_t = "少なく推移した"
-            else:
+                trend_t = "やや多く推移した"
+            elif r >= 90:
                 trend_t = "平年並みに推移した"
+            elif r >= 70:
+                trend_t = "やや少なく推移した"
+            else:
+                trend_t = "かなり少なく推移した"
             summary = (
                 f"栽培期間全体の{target_label}は{total_act:.1f}{u}"
                 f"（平年比{r:.0f}%）であり、全体として{trend_t}。"
@@ -344,12 +344,16 @@ if decoded_text is not None:
                 trends.append({'month': m_s, 'status': s, 'detail': d})
             else:
                 r_m = (row[col_act] / row[col_norm] * 100) if row[col_norm] > 0 else 0
-                if r_m >= 110:
+                if r_m >= 130:
                     s = "多め"
-                elif r_m <= 90:
-                    s = "少なめ"
-                else:
+                elif r_m >= 110:
+                    s = "やや多め"
+                elif r_m >= 90:
                     s = "平年並み"
+                elif r_m >= 70:
+                    s = "やや少なめ"
+                else:
+                    s = "少なめ"
                 trends.append({'month': m_s, 'status': s, 'detail': r_m})
 
         def build_phrase(label, start, end, status, details, is_last=False):
@@ -368,7 +372,7 @@ if decoded_text is not None:
                 max_r = max(details)
                 v = (f"平年比{min_r:.0f}%程度" if f"{min_r:.0f}" == f"{max_r:.0f}"
                      else f"平年比{min_r:.0f}〜{max_r:.0f}%程度")
-                direction = "多く" if status == "多め" else "少なく"
+                direction = "多く" if status in ["多め", "やや多め"] else "少なく"
                 base = f"{period}は{v}と{direction}"
 
             if is_last:
@@ -397,6 +401,102 @@ if decoded_text is not None:
         report = f"{summary}\n詳細を見ると、{'、'.join(grouped)}。"
         st.code(report, language="text")
         st.caption("※右上のアイコンでコピー可能")
+
+        # --- 月別総括表の作成 ---
+        st.subheader("📋 月別気象推移まとめ（総括表）")
+
+        if "平均気温" in available_targets and "降水量" in available_targets:
+            col_t_act = available_targets["平均気温"]["actual"]
+            col_t_norm = available_targets["平均気温"]["normal"]
+            col_p_act = available_targets["降水量"]["actual"]
+            col_p_norm = available_targets["降水量"]["normal"]
+
+            # 月別に集計 (気温は平均、降水量は合計)
+            df_table = df.groupby(['year', 'month']).agg({
+                col_t_act: 'mean',
+                col_t_norm: 'mean',
+                col_p_act: 'sum',
+                col_p_norm: 'sum'
+            }).reset_index().sort_values(['year', 'month'])
+
+            table_data = []
+            for _, row in df_table.iterrows():
+                m_label = f"{int(row['month'])}月"
+
+                # 気温の処理
+                t_act = row[col_t_act]
+                t_norm = row[col_t_norm]
+                if pd.notna(t_act) and pd.notna(t_norm):
+                    t_diff = t_act - t_norm
+                    if abs(t_diff) < 0.5:
+                        t_str = "平年並み"
+                    else:
+                        t_str = f"{t_diff:+.1f}"
+                else:
+                    t_str = "-"
+
+                # 降水量の処理
+                p_act = row[col_p_act]
+                p_norm = row[col_p_norm]
+                if pd.notna(p_act) and pd.notna(p_norm) and p_norm > 0:
+                    p_ratio = (p_act / p_norm) * 100
+                    p_str = f"{p_ratio:.0f}%"
+
+                    # 降水量の新しい区分
+                    if p_ratio >= 130:
+                        p_trend = "多"
+                    elif p_ratio >= 110:
+                        p_trend = "やや多"
+                    elif p_ratio >= 90:
+                        p_trend = "並"
+                    elif p_ratio >= 70:
+                        p_trend = "やや少"
+                    else:
+                        p_trend = "少"
+                else:
+                    p_str = "-"
+                    p_trend = "-"
+
+                table_data.append({
+                    "月": m_label,
+                    "気温平年差（℃）": t_str,
+                    "降水量（対平年比）": p_str,
+                    "降水傾向": p_trend
+                })
+
+            df_summary_table = pd.DataFrame(table_data)
+
+            # 画像のデザインに近いPlotlyテーブルを作成
+            row_colors = ['#ffffff', '#eff3fa'] * (len(df_summary_table) // 2 + 1)
+            fig_table = go.Figure(data=[go.Table(
+                header=dict(
+                    values=["<b>月</b>", "<b>気温平年差（℃）</b>", "<b>降水量（対平年比）</b>", "<b>降水傾向</b>"],
+                    fill_color='#4472c4',
+                    font=dict(color='white', size=14),
+                    align='center',
+                    height=35
+                ),
+                cells=dict(
+                    values=[df_summary_table[col] for col in df_summary_table.columns],
+                    fill_color=[row_colors[:len(df_summary_table)]],
+                    font=dict(color='black', size=13),
+                    align='center',
+                    height=30,
+                    line_color='lightgray'
+                )
+            )])
+            
+            # テーブルの高さと背景を調整
+            fig_table.update_layout(
+                margin=dict(l=0, r=0, t=10, b=0),
+                height=50 + len(df_summary_table) * 30,
+                paper_bgcolor='rgba(0,0,0,0)'
+            )
+            st.plotly_chart(fig_table, use_container_width=True)
+            # 注釈を追加
+            st.caption("※ 降水傾向の区分：多(130%以上)、やや多(110〜129%)、並(90〜109%)、やや少(70〜89%)、少(69%以下)")
+        else:
+            st.info("※総括表を表示するには、アップロードしたデータに「平均気温」と「降水量」の両方が含まれている必要があります。")
 
     except Exception as e:
         st.error(f"エラーが発生しました: {e}")
