@@ -8,7 +8,6 @@ st.set_page_config(page_title="統合型農業気象分析ツール", layout="wi
 st.title("🚜 統合型農業気象分析ツール (アメダス対応版)")
 st.markdown("気象庁からダウンロードした「日別値・平年値入りデータ」を読み込んで分析します。")
 
-
 # --- 内部関数：農業カレンダー付与 ---
 def add_agri_labels(df):
     df = df.copy()
@@ -21,13 +20,11 @@ def add_agri_labels(df):
     df['m_hanjun'] = df['month'].astype(str).str.zfill(2) + "-" + df['hanjun'].astype(str)
     return df
 
-
 # ============================================================
 # 気象庁データを自動解析するパーサー (CSV / タブ区切り 両対応)
 # ============================================================
 def parse_jma_csv(decoded_text):
     delimiter = '\t' if '\t' in decoded_text else ','
-
     all_lines = [l for l in decoded_text.splitlines() if l.strip()]
 
     data_start = None
@@ -126,7 +123,6 @@ def parse_jma_csv(decoded_text):
 
     return df_clean, col_labels, col_map
 
-
 # --- サイドバー：データ入力 ---
 st.sidebar.header("📂 1. データ入力")
 input_method = st.sidebar.radio("入力方法を選択", ["CSVファイルアップロード", "テキストコピペ (Excel等から)"])
@@ -147,7 +143,6 @@ else:
     if pasted_text.strip():
         decoded_text = pasted_text
 
-
 # --- メイン処理 ---
 if decoded_text is not None:
     try:
@@ -166,8 +161,34 @@ if decoded_text is not None:
 
         df = add_agri_labels(df_clean)
 
-        # --- サイドバー：分析設定 ---
+        # --- サイドバー：分析設定（期間指定を含む） ---
         st.sidebar.header("📊 2. 分析設定")
+        
+        # 期間指定
+        min_date = df['date'].min().date()
+        max_date = df['date'].max().date()
+        date_range = st.sidebar.date_input(
+            "分析対象期間",
+            value=(min_date, max_date),
+            min_value=min_date,
+            max_value=max_date
+        )
+        
+        # 選択状態のハンドリング (片方しか選ばれていない瞬間のエラー回避)
+        if len(date_range) == 2:
+            start_date, end_date = date_range
+        else:
+            start_date = date_range[0]
+            end_date = date_range[0]
+            
+        # 選択された期間でデータフレームをフィルタリング
+        df = df[(df['date'].dt.date >= start_date) & (df['date'].dt.date <= end_date)]
+        
+        if df.empty:
+            st.error("指定された期間のデータがありません。期間を変更してください。")
+            st.stop()
+
+        # 表示指標と集計単位の選択
         target_dict = {
             "平均気温": {"actual": "temp_mean", "normal": "temp_mean_normal", "agg": "mean"},
             "最高気温": {"actual": "temp_max",  "normal": "temp_max_normal",  "agg": "mean"},
@@ -236,30 +257,38 @@ if decoded_text is not None:
         is_temp = target_label in ["平均気温", "最高気温", "最低気温"]
 
         if is_temp:
-            # 平年値：グレー点線
+            # 平年値：赤色・点線
             fig.add_trace(go.Scatter(
                 x=df_agg['display_name'], y=df_agg[col_norm],
                 name="平年値",
                 mode='lines',
-                line=dict(color='gray', dash='dot', width=2),
+                line=dict(color='red', dash='dot', width=2),
             ))
-            # 実績値：実線＋マーカー
+            # 実績値（その年）：青色・実線＋マーカー
             fig.add_trace(go.Scatter(
                 x=df_agg['display_name'], y=df_agg[col_act],
                 name=year_label,
                 mode='lines+markers',
-                line=dict(color='#deff9a', width=2),
+                line=dict(color='royalblue', width=2),
                 marker=dict(size=5),
             ))
         else:
-            # 降水量・日照時間：棒グラフ
+            # 降水量・日照時間：平年値は赤色の斜線
             fig.add_trace(go.Bar(
                 x=df_agg['display_name'], y=df_agg[col_norm],
-                name="平年値", marker_color='gray', opacity=0.5
+                name="平年値",
+                marker=dict(
+                    color='rgba(255, 0, 0, 0.4)', # 半透明の赤
+                    pattern_shape='/',            # 斜線ハッチング
+                    line_color='red',             # 枠線を赤に
+                    line_width=1
+                )
             ))
+            # 降水量・日照時間：実績値（その年）は青色のべた塗り
             fig.add_trace(go.Bar(
                 x=df_agg['display_name'], y=df_agg[col_act],
-                name=year_label, marker_color='#deff9a'
+                name=year_label, 
+                marker_color='royalblue'
             ))
 
         UNIT_MAP = {
@@ -298,7 +327,7 @@ if decoded_text is not None:
             else:
                 trend_t = "平年並みに推移した"
             summary = (
-                f"栽培期間全体の{target_label}は{total_act:.1f}℃"
+                f"選択期間全体の{target_label}は{total_act:.1f}℃"
                 f"（平年差{diff_t:+.1f}℃）であり、全体として{trend_t}。"
             )
         else:
@@ -315,7 +344,7 @@ if decoded_text is not None:
             else:
                 trend_t = "かなり少なく推移した"
             summary = (
-                f"栽培期間全体の{target_label}は{total_act:.1f}{u}"
+                f"選択期間全体の{target_label}は{total_act:.1f}{u}"
                 f"（平年比{r:.0f}%）であり、全体として{trend_t}。"
             )
 
